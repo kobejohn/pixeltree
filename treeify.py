@@ -1,106 +1,84 @@
-from collections import deque
 from os import path
 import random
 
 import cv2
 import numpy as np
 
-# todo: just pruning will remove all branches...???
-# todo: speed-up: avoid for loops. use where, logical_and etc.
 
-
-# todo O: sides before corners
-# todo: randomize sides / corners to avoid biased travel
-# todo: deepest leaf --> traverse backwards and then forward on any branches
-# todo: seems like need to store links both ways to do trim traversal
-
-
-# todo: yes, store each node as all outgoing rather than parent/children
-#       so tree can be emergent depending on direction
-# todo: after pruning, identify "bottom" leaf as the arm/wrist. The next
+# todo: first prune everything
+#       deepest leaf --> traverse backwards and then forward on any branches
+# todo: identify "bottom" leaf as the arm/wrist.
 # todo: identify up to five more leaves as fingertips
 #       node is the wrist. then all fingertip angles measured relative to wrist
 
-ROOT = '<< root >>'
-
 
 def demo():
-    image = cv2.imread(path.join('tests', 'test.png'))
+    image = cv2.imread(path.join('tests', 'hand.png'))
     family_map = _make_family_map(image)
-    tree = treeify(family_map)
+    trees = treeify(family_map)
+    for tree in trees:
+        print '{family} ends: {count}'.format(family=tree['family'],
+                                              count=len(tree['ends']))
 
 
-def treeify(family_map, specified_roots=None):
-    incoming = dict()
-    roots = list()
-    joints = list()
-    leaves = list()
+def treeify(family_map):
+    trees = list()
     rows, cols = family_map.shape
     remaining_points = set((r, c) for r in range(rows) for c in range(cols))
+    edges = np.empty_like(family_map, dtype=object)
+    for p in remaining_points:
+        edges[p] = set()  # todo: better way to initialize with sets?
     # continue until all regions within the graph are handled
     while remaining_points:
-        # grow a tree from root points or any remaining point if not povided
-        if specified_roots:
-            root_p = specified_roots.pop()
-            remaining_points.remove(root_p)
-        else:
-            root_p = remaining_points.pop()
-        roots.append(root_p)
-        incoming[root_p] = ROOT
-        q = deque()
-        q.append(root_p)
+        # grow a tree from any remaining point until complete
+        start_p = remaining_points.pop()
+        family = family_map[start_p]
+        tree = {'family': family}
+        trees.append(tree)
+        q = list()
+        q.append(start_p)
         while q:
 
             # todo: remove debug
-            # try:
-            #     debug_counter += 1
-            # except NameError:
-            #     debug_counter = 1
-            # draw_step = int(round(rows * cols * 0.05))
-            # if not debug_counter % draw_step:
-            #     debug_draw_vectors(family_map, incoming, roots, joints, leaves)
+            try:
+                debug_counter += 1
+            except NameError:
+                debug_counter = 1
+            draw_step = int(round(rows * cols * 0.05))
+            if not debug_counter % draw_step:
+                debug_draw_vectors(family_map, edges, remaining_points)
 
-            p = q.popleft()  # pushright + popleft --> breadth first expansion
-            family = family_map[p]
+            # pushright + popleft --> breadth first expansion
+            # random within left part of q - roughly BFS with less pattern
+            p = q.pop(random.randrange(0, max(1, len(q)//2)))
             try:
                 remaining_points.remove(p)
             except KeyError:
-                pass  # already removed
+                pass  # tree start point is always already gone
             # handle each neighbor of this point
-            qualified_n = lambda n_point: all((n_point not in incoming,
+            qualified_n = lambda n_point: all((n_point in remaining_points,
                                                n_point not in q,
                                                family_map[n_point] == family))
-            # expansion_sides = [n for n in _neighbors(p, 'sides', family_map,
-            #                                          include_oob=False)
-            #                    if qualified_n(n)]
-            # expansion_corners = [n for n in _neighbors(p, 'corners', family_map,
-            #                                            include_oob=False)
-            #                      if qualified_n(n)]
-            # random.shuffle(expansion_sides)
-            # random.shuffle(expansion_corners)
-            expansion = [n for n in _neighbors(p, 'all', family_map,
-                                               include_oob=False)
-                         if qualified_n(n)]
-            random.shuffle(expansion)
-            expansion_count = len(expansion)
-            if expansion_count == 0:
-                # this branch is done (tree may still have more to go)
-                leaves.append(p)
-            elif expansion_count > 1:
-                joints.append(p)
-            # build the tree and add expansion
-            for n in expansion:
-                incoming[n] = p
-                q.append(n)
+            expansion = filter(qualified_n,
+                               _neighbors(p, 'all', family_map,
+                                          include_oob=False))
+            random.shuffle(expansion)  # further effort to avoid patterns
+            # document all edges for this point (root None needs condition)
+            edges[p].update(expansion)
+            # send the neighbors for handling
+            q.extend(expansion)
+            # store ends
+            if not expansion:
+                ends = tree.setdefault('ends', set())
+                ends.add(p)
 
     # todo: remove debug
-    debug_draw_vectors(family_map, incoming, roots, joints, leaves)
-    print 'roots: {}'.format(len(roots))
-    print 'joints: {}'.format(len(joints))
-    print 'leaves: {}'.format(len(leaves))
+    debug_draw_vectors(family_map, edges, remaining_points)
+    cv2.waitKey(0)
+
     # prune completely parallel branches
     pass
-    raw_input('done')
+    return trees
 
 
 def _make_family_map(image):
@@ -195,47 +173,7 @@ def _is_out_of_bounds(point, image):
     return False
 
 
-def debug_draw(family_map, incoming, roots, joints, leaves):
-    # common parts
-    rows, cols = family_map.shape
-    # map bases
-    dark_gray = (100, 100, 100)
-    image = np.zeros((rows, cols, 3), dtype=np.uint8)
-    on_family_map = family_map == 'on'
-    off_family_map = family_map == 'off'
-    handled_map = np.empty_like(family_map)
-    handled_map[zip(*incoming)] = True
-    # family base color
-    on_family_points = np.nonzero(on_family_map)
-    image[on_family_points] = dark_gray
-    # all handled points
-    dark_green = (25, 100, 25)
-    dark_red = (25, 25, 100)
-    image[np.where(np.logical_and(handled_map, on_family_map))] = dark_green
-    image[np.where(np.logical_and(handled_map, off_family_map))] = dark_red
-    # all special points
-    white = (255, 255, 255)
-    for joint in joints:
-        image[joint] = white
-    green = (0, 255, 0)
-    red = (0, 0, 255)
-    for leaf in leaves:
-        color = green if family_map[leaf] == 'on' else red
-        image[leaf] = color
-    yellow = (0, 255, 255)
-    blue = (255, 0, 0)
-    for root in roots:
-        color = blue if family_map[root] == 'on' else yellow
-        image[root] = color
-    # scale for ease of inspection
-    scale = 8
-    image = cv2.resize(image, (cols*scale, rows*scale),
-                       interpolation=cv2.INTER_NEAREST)
-    cv2.imshow('asdf', image)
-    cv2.waitKey(1)
-
-
-def debug_draw_vectors(family_map, incoming, roots, joints, leaves):
+def debug_draw_vectors(family_map, edges, remaining_points):
     # common parts
     rows, cols = family_map.shape
     side = 13
@@ -250,7 +188,8 @@ def debug_draw_vectors(family_map, incoming, roots, joints, leaves):
     on_family_map = family_map == 'on'
     off_family_map = family_map == 'off'
     handled_map = np.empty_like(family_map)
-    handled_map[zip(*incoming)] = True
+    handled_map.fill(True)
+    handled_map[zip(*remaining_points)] = False
     # family base color
     on_family_points = np.nonzero(on_family_map)
     image[on_family_points] = dark_gray
@@ -264,41 +203,27 @@ def debug_draw_vectors(family_map, incoming, roots, joints, leaves):
     # connectors
     green = (0, 255, 0)
     red = (0, 0, 255)
-    for child, parent in incoming.items():
-        color = green if family_map[child] == 'on' else red
-        if parent == ROOT:
-            continue  # skip root
-        cv2.line(image_v, center_p_cv(child), center_p_cv(parent), color)
-
-    # # joints
-    # white = (255, 255, 255)
-    # for joint in joints:
-    #     image_v[center_p(joint)] = white
-    # # leaves
-    # green = (0, 255, 0)
-    # red = (0, 0, 255)
-    # for leaf in leaves:
-    #     color = green if family_map[leaf] == 'on' else red
-    #     image_v[center_p(leaf)] = color
-    # # roots
-    # yellow = (0, 255, 255)
-    # blue = (255, 0, 0)
-    # for root in roots:
-    #     color = blue if family_map[root] == 'on' else yellow
-    #     image_v[center_p(root)] = color
-
+    completed_edges = set()
+    all_p = ((r, c) for r in range(rows) for c in range(cols))
+    for center_p in all_p:
+        for connected_point in edges[center_p]:
+            edge_pair = tuple(sorted((center_p, connected_point)))
+            if edge_pair in completed_edges:
+                continue
+            completed_edges.add(edge_pair)
+            color = green if family_map[center_p] == 'on' else red
+            cv2.line(image_v, center_p_cv(connected_point),
+                     center_p_cv(center_p), color)
     # scale to useful size
     image_v_h, image_v_w = image_v.shape[0:2]
     h_limit, w_limit = 600, 1000
     ratio_center = float(h_limit) / w_limit
     ratio = float(image_v_h) / image_v_w
-    print ratio_center, ratio
     if ratio > ratio_center:
         # height is the limiting factor
         target_h, target_w = h_limit, int(round(h_limit / ratio))
     else:
-        target_h, target_w = int(round(w_limit / ratio)), w_limit
-    print target_h, target_w
+        target_h, target_w = int(round(w_limit * ratio)), w_limit
     image_v_scaled = cv2.resize(image_v, (target_w, target_h),
                                 interpolation=cv2.INTER_AREA)
     cv2.imshow('asdf', image_v_scaled)
@@ -306,8 +231,6 @@ def debug_draw_vectors(family_map, incoming, roots, joints, leaves):
 
 
 if __name__ == '__main__':
-    import cProfile
-    r = cProfile.run('demo()')
-    print r
-    #
-    # demo()
+    # import cProfile
+    # r = cProfile.run('demo()')
+    demo()
