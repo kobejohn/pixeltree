@@ -36,14 +36,14 @@ def treeify(family_map):
         q.append((None, start_p))
         while q:
 
-            # todo: remove debug
-            try:
-                debug_counter += 1
-            except NameError:
-                debug_counter = 1
-            draw_step = int(round(rows * cols * 0.05))
-            if not debug_counter % draw_step:
-                debug_draw_vectors(family_map, edges, remaining_points)
+            # # todo: remove debug
+            # try:
+            #     debug_counter += 1
+            # except NameError:
+            #     debug_counter = 1
+            # draw_step = int(round(rows * cols * 0.05))
+            # if not debug_counter % draw_step:
+            #     debug_draw_vectors(family_map, edges, remaining_points)
 
             # pushright + popleft --> breadth first expansion
             # random within left part of q - roughly BFS with less pattern
@@ -73,29 +73,55 @@ def treeify(family_map):
             edges[p].update(all_connections)
 
     # prune all but "best" branches within an area
+    # work on each tree
     for tree in trees:
         family = tree['family']
-        # for internal_end in internal_ends:
+        # prune until all ends are "good"
+        # idea: clear out internal areas of non-primary paths
+        # from any end. bfs outward. hit same-family, non-path --> prune
+        # run out of points to expand --> ok!
         while True:
+            disqualified = False
             for e in tree['ends']:
-                for n in _neighbors(e, 'all', family_map):
-                    if all((family_map[n] == family,
-                            e not in edges[n],
-                            len(edges[n]))):
-                        internal_end = e
+                # pushright/popleft for BFS
+                q = deque()
+                q.append(e)
+                self_path = set()
+                while q:
+                    p = q.popleft()
+                    inbounds_n = _neighbors(p, 'all', family_map)
+                    # document all same-path neighbors
+                    self_path.update(n for n in inbounds_n if n in edges[p])
+                    # any disqualifying neighbor --> done and prune
+                    for n in inbounds_n:
+                        if (family_map[n] == family) and (n not in self_path):
+                            disqualified = True
+                    if disqualified:
                         break
-                else:
-                    internal_end = None
-                if internal_end:
+                    # any edge --> don't push neighbors onto search queue
+                    point_done = False
+                    if len(inbounds_n) != 8:  # hardcoded but multipass!
+                        point_done = True
+                    if point_done:
+                        continue
+                    # any diff family --> don't push neighbors onto search queue
+                    for n in inbounds_n:
+                        if family_map[n] != family:
+                            point_done = True
+                            break
+                    if point_done:
+                        continue
+                    # otherwise push neighbors onto search queue
+                    q.extend(inbounds_n)
+                # after finishing BFS:
+                if disqualified:
+                    # found a disqualified end so break out to prune it
                     break
-            if internal_end is None:
+            if not disqualified:
+                # there were no disqualified ends in all ends so finished
                 break
             else:
-                # todo: modification: if same-family line available to another
-                #       branch, then keep better, prune worse
-                #       better == ?? longest to common node?
-                # found a qualifying end. prune all degenerate nodes
-                prune_e = internal_end
+                prune_e = e
                 # remove it first from ends (will prune back to a non-end)
                 tree['ends'].remove(prune_e)
                 while len(edges[prune_e]) == 1:
@@ -103,9 +129,12 @@ def treeify(family_map):
                     connected = edges[prune_e].pop()
                     edges[connected].remove(prune_e)
                     prune_e = connected
+
+                # todo: remove debug
                 debug_draw_vectors(family_map, edges, remaining_points)
                 cv2.waitKey(1)
-        raw_input('finished pruning family')
+        print 'finished pruning one family region'
+        cv2.waitKey(0)
 
     # todo: remove debug
     debug_draw_vectors(family_map, edges, remaining_points)
