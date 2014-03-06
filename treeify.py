@@ -1,15 +1,9 @@
+from collections import Counter, deque
 from os import path
 import random
 
 import cv2
 import numpy as np
-
-
-# todo: first prune everything
-#       deepest leaf --> traverse backwards and then forward on any branches
-# todo: identify "bottom" leaf as the arm/wrist.
-# todo: identify up to five more leaves as fingertips
-#       node is the wrist. then all fingertip angles measured relative to wrist
 
 
 def demo():
@@ -24,6 +18,7 @@ def demo():
 
 def treeify(family_map):
     trees = list()
+
     rows, cols = family_map.shape
     remaining_points = set((r, c) for r in range(rows) for c in range(cols))
     edges = np.empty_like(family_map, dtype=object)
@@ -79,9 +74,31 @@ def treeify(family_map):
 
     # todo: remove debug
     debug_draw_vectors(family_map, edges, remaining_points)
-    cv2.waitKey(0)
+    cv2.waitKey(1)
+    # get histogram of length from leaf to joint
+    for tree in trees:
+        end_heights = []
+        for end in tree['ends']:
+            # traverse from each end until hit a joint or other end
+            if not edges[end]:
+                height = 0  # no traversal if no ends
+            else:
+                height = 1
+                last_p = end
+                p, = edges[end]  # only one point for an end.
+                while len(edges[p]) == 2:
+                    height += 1
+                    a, b = edges[p]
+                    last_p, p = p, a if a != last_p else b
+            end_heights.append((end, height))
+        # display a histogram
+        heights = zip(*end_heights)[1]
+        height_counts = Counter(heights)
+        print '*************************'
+        print height_counts
+    raw_input('asdf')
 
-    # prune completely parallel branches
+    # prune or otherwise manipulate graph to be useful
     pass
     return trees, edges
 
@@ -176,6 +193,23 @@ def _is_out_of_bounds(point, image):
             return True
     # by default it is in-bounds
     return False
+
+
+def _traverse_tree(start_p, edges):
+    q = deque()
+    q.append((start_p, 0))  # start depth zero
+    while q:
+        p, depth = q.pop()
+        q.extend((n, depth+1) for n in edges[p] if n != p)
+        yield p, depth
+
+
+# def _most_distant_leaf(tree, start_p, edges):
+#     max_depth_leaf, max_depth = start_p, 0
+#     for p, depth in _traverse_tree(tree, start_p, edges):
+#         if (max_depth is None) or (depth > max_depth):
+#             max_depth_leaf, max_depth = p, depth
+#     return max_depth_leaf, max_depth
 
 
 def debug_draw_vectors(family_map, edges, remaining_points):
