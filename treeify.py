@@ -15,7 +15,8 @@ import numpy as np
 def demo():
     image = cv2.imread(path.join('tests', 'hand.png'))
     family_map = _make_family_map(image)
-    trees = treeify(family_map)
+    trees, edges = treeify(family_map)
+
     for tree in trees:
         print '{family} ends: {count}'.format(family=tree['family'],
                                               count=len(tree['ends']))
@@ -33,10 +34,11 @@ def treeify(family_map):
         # grow a tree from any remaining point until complete
         start_p = remaining_points.pop()
         family = family_map[start_p]
-        tree = {'family': family}
+        tree = {'family': family,
+                'ends': set()}
         trees.append(tree)
         q = list()
-        q.append(start_p)
+        q.append((None, start_p))
         while q:
 
             # todo: remove debug
@@ -50,27 +52,30 @@ def treeify(family_map):
 
             # pushright + popleft --> breadth first expansion
             # random within left part of q - roughly BFS with less pattern
-            p = q.pop(random.randrange(0, max(1, len(q)//2)))
+            source, p = q.pop(random.randrange(0, max(1, len(q)//2)))
             try:
                 remaining_points.remove(p)
             except KeyError:
                 pass  # tree start point is always already gone
-            # handle each neighbor of this point
-            qualified_n = lambda n_point: all((n_point in remaining_points,
-                                               n_point not in q,
-                                               family_map[n_point] == family))
-            expansion = filter(qualified_n,
-                               _neighbors(p, 'all', family_map,
-                                          include_oob=False))
-            random.shuffle(expansion)  # further effort to avoid patterns
-            # document all edges for this point (root None needs condition)
-            edges[p].update(expansion)
-            # send the neighbors for handling
-            q.extend(expansion)
+            # send qualifying neighbors for expansion
+            q_points = tuple(qp for sp, qp in q)
+            expansion_points = [n for n in _neighbors(p, 'all', family_map)
+                                if all((n != source,
+                                        n in remaining_points,
+                                        n not in q_points,
+                                        family_map[n] == family))]
+            expansion_pairs = [(p, n) for n in expansion_points]
+            random.shuffle(expansion_pairs)  # further effort to avoid patterns
+            q.extend(expansion_pairs)
             # store ends
-            if not expansion:
-                ends = tree.setdefault('ends', set())
-                ends.add(p)
+            if not expansion_points:
+                tree['ends'].add(p)
+            # document all edges for this point
+            if source is None:
+                all_connections = list(expansion_points)
+            else:
+                all_connections = expansion_points + [source]
+            edges[p].update(all_connections)
 
     # todo: remove debug
     debug_draw_vectors(family_map, edges, remaining_points)
@@ -78,7 +83,7 @@ def treeify(family_map):
 
     # prune completely parallel branches
     pass
-    return trees
+    return trees, edges
 
 
 def _make_family_map(image):
