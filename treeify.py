@@ -1,4 +1,4 @@
-from collections import Counter, deque
+from collections import deque
 from os import path
 import random
 
@@ -72,34 +72,46 @@ def treeify(family_map):
                 all_connections = expansion_points + [source]
             edges[p].update(all_connections)
 
+    # prune all but "best" branches within an area
+    for tree in trees:
+        family = tree['family']
+        # for internal_end in internal_ends:
+        while True:
+            for e in tree['ends']:
+                for n in _neighbors(e, 'all', family_map):
+                    if all((family_map[n] == family,
+                            e not in edges[n],
+                            len(edges[n]))):
+                        internal_end = e
+                        break
+                else:
+                    internal_end = None
+                if internal_end:
+                    break
+            if internal_end is None:
+                break
+            else:
+                # todo: modification: if same-family line available to another
+                #       branch, then keep better, prune worse
+                #       better == ?? longest to common node?
+                # found a qualifying end. prune all degenerate nodes
+                prune_e = internal_end
+                # remove it first from ends (will prune back to a non-end)
+                tree['ends'].remove(prune_e)
+                while len(edges[prune_e]) == 1:
+                    # remove both ways
+                    connected = edges[prune_e].pop()
+                    edges[connected].remove(prune_e)
+                    prune_e = connected
+                debug_draw_vectors(family_map, edges, remaining_points)
+                cv2.waitKey(1)
+        raw_input('finished pruning family')
+
     # todo: remove debug
     debug_draw_vectors(family_map, edges, remaining_points)
-    cv2.waitKey(1)
-    # get histogram of length from leaf to joint
-    for tree in trees:
-        end_heights = []
-        for end in tree['ends']:
-            # traverse from each end until hit a joint or other end
-            if not edges[end]:
-                height = 0  # no traversal if no ends
-            else:
-                height = 1
-                last_p = end
-                p, = edges[end]  # only one point for an end.
-                while len(edges[p]) == 2:
-                    height += 1
-                    a, b = edges[p]
-                    last_p, p = p, a if a != last_p else b
-            end_heights.append((end, height))
-        # display a histogram
-        heights = zip(*end_heights)[1]
-        height_counts = Counter(heights)
-        print '*************************'
-        print height_counts
-    raw_input('asdf')
+    cv2.waitKey(0)
+    cv2.waitKey(0)
 
-    # prune or otherwise manipulate graph to be useful
-    pass
     return trees, edges
 
 
