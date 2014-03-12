@@ -11,14 +11,9 @@ def demo():
     family_map = _make_family_map(image)
     trees, edges = treeify(family_map)
 
-    for tree in trees:
-        print '{family} ends: {count}'.format(family=tree['family'],
-                                              count=len(tree['ends']))
-
 
 def treeify(family_map):
     trees = list()
-
     rows, cols = family_map.shape
     remaining_points = set((r, c) for r in range(rows) for c in range(cols))
     edges = np.empty_like(family_map, dtype=object)
@@ -30,21 +25,11 @@ def treeify(family_map):
         start_p = remaining_points.pop()
         family = family_map[start_p]
         tree = {'family': family,
-                'ends': set()}
+                'any_point': start_p}#,
         trees.append(tree)
         q = list()
         q.append((None, start_p))
         while q:
-
-            # # todo: remove debug
-            # try:
-            #     debug_counter += 1
-            # except NameError:
-            #     debug_counter = 1
-            # draw_step = int(round(rows * cols * 0.05))
-            # if not debug_counter % draw_step:
-            #     debug_draw_vectors(family_map, edges, remaining_points)
-
             # pushright + popleft --> breadth first expansion
             # random within left part of q - roughly BFS with less pattern
             source, p = q.pop(random.randrange(0, max(1, len(q)//2)))
@@ -62,9 +47,6 @@ def treeify(family_map):
             expansion_pairs = [(p, n) for n in expansion_points]
             random.shuffle(expansion_pairs)  # further effort to avoid patterns
             q.extend(expansion_pairs)
-            # store ends
-            if not expansion_points:
-                tree['ends'].add(p)
             # document all edges for this point
             if source is None:
                 all_connections = list(expansion_points)
@@ -73,75 +55,73 @@ def treeify(family_map):
             edges[p].update(all_connections)
 
     # prune all but "best" branches within an area
+    class Disqualified(Exception):
+        def __init__(self, disqualified_leaf):
+            self.disqualified_leaf = disqualified_leaf
     # work on each tree
     for tree in trees:
         family = tree['family']
-        # prune until all ends are "good"
-        # idea: clear out internal areas of non-primary paths
-        # from any end. bfs outward. hit same-family, non-path --> prune
-        # run out of points to expand --> ok!
-        while True:
-            disqualified = False
-            for e in tree['ends']:
-                # pushright/popleft for BFS
-                q = deque()
-                q.append(e)
-                self_path = set()
-                while q:
-                    p = q.popleft()
-                    inbounds_n = _neighbors(p, 'all', family_map)
-                    # document all same-path neighbors
-                    self_path.update(n for n in inbounds_n if n in edges[p])
-                    # any disqualifying neighbor --> done and prune
-                    for n in inbounds_n:
-                        if (family_map[n] == family) and (n not in self_path):
-                            disqualified = True
-                    if disqualified:
-                        break
-                    # any edge --> don't push neighbors onto search queue
-                    point_done = False
-                    if len(inbounds_n) != 8:  # hardcoded but multipass!
-                        point_done = True
-                    if point_done:
-                        continue
-                    # any diff family --> don't push neighbors onto search queue
-                    for n in inbounds_n:
-                        if family_map[n] != family:
-                            point_done = True
-                            break
-                    if point_done:
-                        continue
-                    # otherwise push neighbors onto search queue
-                    q.extend(inbounds_n)
-                # after finishing BFS:
-                if disqualified:
-                    # found a disqualified end so break out to prune it
+        # root graph at one end of the longest path in the graph
+        distant_point = _most_distant_node(tree['any_point'], edges)
+        # for choosing best paths: document the depth of every pixel
+        depths = dict(_traverse_tree(distant_point, edges))
+        # repeatedly look for a leaf and decide to keep it or prune its branch
+        # stop when no leaves are pruned
+        made_changes = True
+        while made_changes:
+            try:
+                leaves = list(_leaves(distant_point, edges))
+                random.shuffle(leaves)
+                for leaf in leaves:
+                    # identify any degenerate path to next branching pixel
+                    # this path is ignored when testing for nearby branches
+                    ignore = set(_identify_degenerate_branch(leaf, edges))
+                    # BFS expansion to find nearby other branches
+                    expansion_q = deque()
+                    expansion_q.append(leaf)
+                    while expansion_q:
+                        p = expansion_q.popleft()  # pushright + popleft for BFS
+                        ignore.add(p)
+
+                        # # todo: this debug shows each step of prune testing
+                        # debug_draw_vectors(family_map,edges, tuple(), ignore)
+
+                        # decide what to do with each neighbor
+                        for n in _neighbors(p, 'sides', family_map):
+                            if n in ignore:
+                                continue  # already decided to ignore this point
+                            elif n in expansion_q:
+                                continue  # already slated for expansion testing
+                            elif family_map[n] != family:
+                                ignore.add(n)  # ignore other families
+                                continue
+                            elif _disqualified(leaf, n, edges, depths):
+                                raise Disqualified(leaf)
+                            else:
+                                expansion_q.append(n)
+                else:
+                    # made no changes in all leaves --> time to stop looking
+                    made_changes = False
                     break
-            if not disqualified:
-                # there were no disqualified ends in all ends so finished
-                break
-            else:
-                prune_e = e
-                # remove it first from ends (will prune back to a non-end)
-                tree['ends'].remove(prune_e)
-                while len(edges[prune_e]) == 1:
-                    # remove both ways
-                    connected = edges[prune_e].pop()
-                    edges[connected].remove(prune_e)
-                    prune_e = connected
+            except Disqualified as e:
+                disqualified_leaf = e.disqualified_leaf
+                _prune_branch_of_leaf(disqualified_leaf, edges, depths)
 
-                # todo: remove debug
-                debug_draw_vectors(family_map, edges, remaining_points)
-                cv2.waitKey(1)
-        print 'finished pruning one family region'
-        cv2.waitKey(0)
-
-    # todo: remove debug
-    debug_draw_vectors(family_map, edges, remaining_points)
-    cv2.waitKey(0)
-    cv2.waitKey(0)
+           # # todo: this debug shows the final result of each pruning
+           # debug_draw_vectors(family_map,edges, tuple(), ignore)
+    # todo: this debug shows the final result of the whole process
+    debug_draw_vectors(family_map,edges, tuple(), tuple())
 
     return trees, edges
+
+
+def _disqualified(leaf, compare_point, edges, depths):
+    """Return True if compare point is "better" than leaf as a major path."""
+    if not _is_leaf(leaf, edges):
+        raise ValueError('{} does not seem to be a leaf'.format(leaf))
+    if depths[compare_point] >= depths[leaf]:
+        return True
+    return False
 
 
 def _make_family_map(image):
@@ -238,22 +218,78 @@ def _is_out_of_bounds(point, image):
 
 def _traverse_tree(start_p, edges):
     q = deque()
-    q.append((start_p, 0))  # start depth zero
+    q.append((None, start_p, 0))  # start depth zero
     while q:
-        p, depth = q.pop()
-        q.extend((n, depth+1) for n in edges[p] if n != p)
-        yield p, depth
+        parent, point, depth = q.pop()
+        q.extend((point, n, depth+1) for n in edges[point] if n != parent)
+        yield point, depth
 
 
-# def _most_distant_leaf(tree, start_p, edges):
-#     max_depth_leaf, max_depth = start_p, 0
-#     for p, depth in _traverse_tree(tree, start_p, edges):
-#         if (max_depth is None) or (depth > max_depth):
-#             max_depth_leaf, max_depth = p, depth
-#     return max_depth_leaf, max_depth
+def _leaves(root, edges):
+    for p, depth in _traverse_tree(root, edges):
+        if p == root:
+            continue  # skip the root
+        if _is_leaf(p, edges):
+            yield p
 
 
-def debug_draw_vectors(family_map, edges, remaining_points):
+def _most_distant_node(start_p, edges):
+    max_depth_node, max_depth = start_p, 0
+    for p, depth in _traverse_tree(start_p, edges):
+        if (max_depth is None) or (depth > max_depth):
+            max_depth_node, max_depth = p, depth
+    return max_depth_node
+
+
+def _prune_branch_of_leaf(leaf, edges, depths):
+    if not _is_leaf(leaf, edges):
+        raise ValueError('{} does not seem to be a leaf'.format(leaf))
+    degenerate_points = _identify_degenerate_branch(leaf, edges)
+    # clear neighbors of references to this branch
+    ends = degenerate_points[0], degenerate_points[-1]
+    for end in ends:
+        for n in edges[end]:
+            try:
+                edges[n].remove(end)
+            except KeyError:
+                pass
+    # then clear all connections and depths for this branch
+    for p in degenerate_points:
+        edges[p].clear()
+        depths[p] = 0
+
+
+def _identify_degenerate_branch(leaf, edges):
+    if not _is_leaf(leaf, edges):
+        raise ValueError('{} does not seem to be a leaf'.format(leaf))
+    # todo: this could be changed to include the branching node also...?
+    degenerate_branch = [leaf]
+    try:
+        parent, point = leaf, next(iter(edges[leaf]))  # take the first step
+    except StopIteration:
+        # the leaf is actually just a point. still qualifies as d.branch
+        return degenerate_branch
+    else:
+        # it wasn't just an isolated point leaf so look for the branch
+        while len(edges[point]) in (1, 2):  # 2-->path; 1-->whole tree is degen.
+            degenerate_branch.append(point)
+            try:
+                a, b = edges[point]
+            except ValueError:
+                break  # the whole tree is degenerate. return it as is
+            old_point = point
+            point = a if a != parent else b
+            parent = old_point
+    return degenerate_branch
+
+
+def _is_leaf(node, edges):
+    return len(edges[node]) <= 1
+
+
+def debug_draw_vectors(family_map, edges, remaining_points,
+                       other_points=None):
+    other_points = other_points or tuple()
     # common parts
     rows, cols = family_map.shape
     side = 13
@@ -278,6 +314,9 @@ def debug_draw_vectors(family_map, edges, remaining_points):
     dark_red = (25, 25, 100)
     image[np.where(np.logical_and(handled_map, on_family_map))] = dark_green
     image[np.where(np.logical_and(handled_map, off_family_map))] = dark_red
+    # all "other" points of interest
+    yellow = (0, 255, 255)
+    image[zip(*other_points)] = yellow
     # scale up and start making detailed additions
     image_v = resizer(image)
     # connectors
@@ -307,7 +346,7 @@ def debug_draw_vectors(family_map, edges, remaining_points):
     image_v_scaled = cv2.resize(image_v, (target_w, target_h),
                                 interpolation=cv2.INTER_AREA)
     cv2.imshow('asdf', image_v_scaled)
-    cv2.waitKey(1)
+    cv2.waitKey(0)
 
 
 if __name__ == '__main__':
