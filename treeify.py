@@ -5,6 +5,10 @@ import random
 import cv2
 import numpy as np
 
+# todo: add target family argument
+# todo: add option to expand to all or only sides (e.g. large areas limit to sides)
+# todo: can't neighbors be simplified?
+
 
 def demo():
     image = cv2.imread(path.join('tests', 'hand.png'))
@@ -23,6 +27,7 @@ def treeify(family_map):
     while remaining_points:
         # grow a tree from any remaining point until complete
         start_p = remaining_points.pop()
+        # todo: should be refactored from here into _full_tree or similar
         family = family_map[start_p]
         tree = {'family': family,
                 'any_point': start_p}
@@ -56,6 +61,7 @@ def treeify(family_map):
     # prune all but "best" branches within an area
     # work on each tree
     for tree in trees:
+        # todo: should be refactored from here to _simplify_tree() or similar
         family = tree['family']
         # root graph at one end of the longest path in the graph
         distant_point = _most_distant_node(tree['any_point'], edges)
@@ -76,7 +82,7 @@ def treeify(family_map):
                 p = expansion_q.popleft()  # pushright + popleft for BFS
                 ignore.add(p)
 
-                # # todo: this debug shows each step of prune testing
+# todo: this debug shows each step of prune testing
                 # debug_draw_vectors(family_map,edges, tuple(), ignore, leaf)
 
                 # decide what to do with each neighbor
@@ -92,7 +98,7 @@ def treeify(family_map):
                         expansion_q.append(n)  # expand into empty spaces
                     elif _disqualified(leaf, n, edges, heights):
 
-                        # # todo: this debug shows the final result of each pruning
+# todo: this debug shows the final result of each pruning
                         # debug_draw_vectors(family_map,edges, tuple(), ignore, distant_point)
 
                         _prune_branch_of_leaf(leaf, edges, heights)
@@ -101,7 +107,7 @@ def treeify(family_map):
                     else:
                         expansion_q.append(n)
 
-    # todo: this debug shows the final result of the whole process
+# todo: this debug shows the final result of the whole process
     debug_draw_vectors(family_map, edges, tuple(), tuple())
 
     return trees, edges
