@@ -25,7 +25,7 @@ def treeify(family_map):
         start_p = remaining_points.pop()
         family = family_map[start_p]
         tree = {'family': family,
-                'any_point': start_p}#,
+                'any_point': start_p}
         trees.append(tree)
         q = list()
         q.append((None, start_p))
@@ -45,7 +45,6 @@ def treeify(family_map):
                                         n not in q_points,
                                         family_map[n] == family))]
             expansion_pairs = [(p, n) for n in expansion_points]
-            random.shuffle(expansion_pairs)  # further effort to avoid patterns
             q.extend(expansion_pairs)
             # document all edges for this point
             if source is None:
@@ -55,9 +54,6 @@ def treeify(family_map):
             edges[p].update(all_connections)
 
     # prune all but "best" branches within an area
-    class Disqualified(Exception):
-        def __init__(self, disqualified_leaf):
-            self.disqualified_leaf = disqualified_leaf
     # work on each tree
     for tree in trees:
         family = tree['family']
@@ -65,50 +61,40 @@ def treeify(family_map):
         distant_point = _most_distant_node(tree['any_point'], edges)
         # for choosing best paths: document the depth of every pixel
         depths = dict(_traverse_tree(distant_point, edges))
+        remaining_leaves = set(_leaves(distant_point, edges))
         # repeatedly look for a leaf and decide to keep it or prune its branch
         # stop when no leaves are pruned
-        made_changes = True
-        while made_changes:
-            try:
-                leaves = list(_leaves(distant_point, edges))
-                random.shuffle(leaves)
-                for leaf in leaves:
-                    # identify any degenerate path to next branching pixel
-                    # this path is ignored when testing for nearby branches
-                    ignore = set(_identify_degenerate_branch(leaf, edges))
-                    # BFS expansion to find nearby other branches
-                    expansion_q = deque()
-                    expansion_q.append(leaf)
-                    while expansion_q:
-                        p = expansion_q.popleft()  # pushright + popleft for BFS
-                        ignore.add(p)
+        while remaining_leaves:
+            leaf = remaining_leaves.pop()
+            # identify any degenerate path to next branching pixel
+            # this path is ignored when testing for nearby branches
+            ignore = set(_identify_degenerate_branch(leaf, edges))
+            # BFS expansion to find nearby other branches
+            expansion_q = deque()
+            expansion_q.append(leaf)
+            while expansion_q:
+                p = expansion_q.popleft()  # pushright + popleft for BFS
+                ignore.add(p)
 
-                        # # todo: this debug shows each step of prune testing
-                        # debug_draw_vectors(family_map,edges, tuple(), ignore)
+                # # todo: this debug shows each step of prune testing
+                # debug_draw_vectors(family_map,edges, tuple(), ignore)
 
-                        # decide what to do with each neighbor
-                        for n in _neighbors(p, 'sides', family_map):
-                            if n in ignore:
-                                continue  # already decided to ignore this point
-                            elif n in expansion_q:
-                                continue  # already slated for expansion testing
-                            elif family_map[n] != family:
-                                ignore.add(n)  # ignore other families
-                                continue
-                            elif _disqualified(leaf, n, edges, depths):
-                                raise Disqualified(leaf)
-                            else:
-                                expansion_q.append(n)
-                else:
-                    # made no changes in all leaves --> time to stop looking
-                    made_changes = False
-                    break
-            except Disqualified as e:
-                disqualified_leaf = e.disqualified_leaf
-                _prune_branch_of_leaf(disqualified_leaf, edges, depths)
+                # decide what to do with each neighbor
+                for n in _neighbors(p, 'sides', family_map):
+                    if n in ignore:
+                        continue  # already decided to ignore this point
+                    elif n in expansion_q:
+                        continue  # already slated for expansion testing
+                    elif family_map[n] != family:
+                        ignore.add(n)  # ignore other families
+                        continue
+                    elif _disqualified(leaf, n, edges, depths):
+                        _prune_branch_of_leaf(leaf, edges, depths)
+                    else:
+                        expansion_q.append(n)
 
-           # # todo: this debug shows the final result of each pruning
-           # debug_draw_vectors(family_map,edges, tuple(), ignore)
+            # # todo: this debug shows the final result of each pruning
+            # debug_draw_vectors(family_map,edges, tuple(), ignore)
     # todo: this debug shows the final result of the whole process
     debug_draw_vectors(family_map,edges, tuple(), tuple())
 
@@ -262,7 +248,6 @@ def _prune_branch_of_leaf(leaf, edges, depths):
 def _identify_degenerate_branch(leaf, edges):
     if not _is_leaf(leaf, edges):
         raise ValueError('{} does not seem to be a leaf'.format(leaf))
-    # todo: this could be changed to include the branching node also...?
     degenerate_branch = [leaf]
     try:
         parent, point = leaf, next(iter(edges[leaf]))  # take the first step
