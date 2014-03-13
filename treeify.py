@@ -12,17 +12,19 @@ import numpy as np
 
 def demo():
     image = cv2.imread(path.join('tests', 'hand.png'))
+    trees, edges = treeify(image, ['on'])
+
+
+def treeify(image, target_families=None):
+    # family map is used everywhere to identify pixels, regions, etc.
     family_map = _make_family_map(image)
-    trees, edges = treeify(family_map)
-
-
-def treeify(family_map):
+    target_families = target_families or np.unique(family_map)
     trees = list()
     rows, cols = family_map.shape
-    remaining_points = set((r, c) for r in range(rows) for c in range(cols))
+    remaining_points = set((r, c) for r in range(rows) for c in range(cols)
+                           if family_map[r, c] in target_families)
     edges = np.empty_like(family_map, dtype=object)
-    for p in remaining_points:
-        edges[p] = set()  # todo: better way to initialize with sets?
+    edges.flat = [set() for _ in edges.flat]
     # continue until all regions within the graph are handled
     while remaining_points:
         # grow a tree from any remaining point until complete
@@ -132,6 +134,7 @@ def _make_family_map(image):
     return family_map
 
 
+# todo: replace this with whatever you want to break up image into regions
 def _identify_family(point, image):
     """Return a key identifying the family of point within image.
 
