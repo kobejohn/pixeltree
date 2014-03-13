@@ -59,8 +59,8 @@ def treeify(family_map):
         family = tree['family']
         # root graph at one end of the longest path in the graph
         distant_point = _most_distant_node(tree['any_point'], edges)
-        # for choosing best paths: document the depth of every pixel
-        depths = dict(_traverse_tree(distant_point, edges))
+        # for choosing best paths: document the height of every pixel
+        heights = _heights(distant_point, edges)
         remaining_leaves = set(_leaves(distant_point, edges))
         # repeatedly look for a leaf and decide to keep it or prune its branch
         # stop when no leaves are pruned
@@ -77,7 +77,7 @@ def treeify(family_map):
                 ignore.add(p)
 
                 # # todo: this debug shows each step of prune testing
-                # debug_draw_vectors(family_map,edges, tuple(), ignore)
+                # debug_draw_vectors(family_map,edges, tuple(), ignore, leaf)
 
                 # decide what to do with each neighbor
                 for n in _neighbors(p, 'sides', family_map):
@@ -88,24 +88,30 @@ def treeify(family_map):
                     elif family_map[n] != family:
                         ignore.add(n)  # ignore other families
                         continue
-                    elif _disqualified(leaf, n, edges, depths):
-                        _prune_branch_of_leaf(leaf, edges, depths)
+                    elif len(edges[n]) == 0:
+                        expansion_q.append(n)  # expand into empty spaces
+                    elif _disqualified(leaf, n, edges, heights):
+
+                        # # todo: this debug shows the final result of each pruning
+                        # debug_draw_vectors(family_map,edges, tuple(), ignore, distant_point)
+
+                        _prune_branch_of_leaf(leaf, edges, heights)
+                        expansion_q.clear()  # this leaf is done. stop looking
+                        break
                     else:
                         expansion_q.append(n)
 
-            # # todo: this debug shows the final result of each pruning
-            # debug_draw_vectors(family_map,edges, tuple(), ignore)
     # todo: this debug shows the final result of the whole process
-    debug_draw_vectors(family_map,edges, tuple(), tuple())
+    debug_draw_vectors(family_map, edges, tuple(), tuple())
 
     return trees, edges
 
 
-def _disqualified(leaf, compare_point, edges, depths):
+def _disqualified(leaf, compare_point, edges, heights):
     """Return True if compare point is "better" than leaf as a major path."""
     if not _is_leaf(leaf, edges):
         raise ValueError('{} does not seem to be a leaf'.format(leaf))
-    if depths[compare_point] >= depths[leaf]:
+    if heights[compare_point] >= heights[leaf]:
         return True
     return False
 
@@ -202,26 +208,47 @@ def _is_out_of_bounds(point, image):
     return False
 
 
-def _traverse_tree(start_p, edges):
+def _traverse_tree(root, edges):
     q = deque()
-    q.append((None, start_p, 0))  # start depth zero
+    q.append((None, root, 0))  # start depth zero
     while q:
         parent, point, depth = q.pop()
         q.extend((point, n, depth+1) for n in edges[point] if n != parent)
-        yield point, depth
+        yield point, depth, parent
 
 
 def _leaves(root, edges):
-    for p, depth in _traverse_tree(root, edges):
+    for p, depth, _ in _traverse_tree(root, edges):
         if p == root:
             continue  # skip the root
         if _is_leaf(p, edges):
             yield p
 
 
+def _is_leaf(node, edges):
+    return len(edges[node]) <= 1
+
+
+def _heights(root, edges):
+    bottom_up_nodes = reversed(list(_traverse_tree(root, edges)))
+    heights = dict()
+    for point, depth, parent in bottom_up_nodes:
+        # set subtree depth 0 for leaves
+        if _is_leaf(point, edges):
+            heights[point] = 0
+        # ignore the root
+        if parent is None:
+            continue
+        # set/reset/ignore parent
+        current_height = heights[point]
+        heights[parent] = max(1+current_height,
+                              heights.get(parent, 0))
+    return heights
+
+
 def _most_distant_node(start_p, edges):
     max_depth_node, max_depth = start_p, 0
-    for p, depth in _traverse_tree(start_p, edges):
+    for p, depth, _ in _traverse_tree(start_p, edges):
         if (max_depth is None) or (depth > max_depth):
             max_depth_node, max_depth = p, depth
     return max_depth_node
@@ -268,12 +295,8 @@ def _identify_degenerate_branch(leaf, edges):
     return degenerate_branch
 
 
-def _is_leaf(node, edges):
-    return len(edges[node]) <= 1
-
-
 def debug_draw_vectors(family_map, edges, remaining_points,
-                       other_points=None):
+                       other_points=None, target_point=None):
     other_points = other_points or tuple()
     # common parts
     rows, cols = family_map.shape
@@ -302,6 +325,10 @@ def debug_draw_vectors(family_map, edges, remaining_points,
     # all "other" points of interest
     yellow = (0, 255, 255)
     image[zip(*other_points)] = yellow
+    # specific target point
+    blue = (255, 0, 0)
+    if target_point:
+        image[target_point] = blue
     # scale up and start making detailed additions
     image_v = resizer(image)
     # connectors
